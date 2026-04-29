@@ -702,7 +702,7 @@ const Sidebar: NextPage<SidebarProps> = ({ isCollapsed, setIsCollapsed }) => {
         <>
           <div
             className={clsx(
-              "fixed inset-0 z-[99991] bg-black/30 backdrop-blur-sm",
+              "fixed inset-0 z-[99991] bg-black/30",
               "transition-opacity duration-300 ease-out",
               mobileMoreVisible ? "opacity-100" : "opacity-0"
             )}
