@@ -34,32 +34,44 @@ export async function initiateClient(apiKey: string) {
   return Client
 }
 
-async function listAllGroupRolesForGroup(
-  client: Awaited<ReturnType<typeof initiateClient>>,
-  groupId: string
-): Promise<{ id: string; rank: number }[]> {
-  const all: { id: string; rank: number }[] = [];
+async function listAllGroupRolesForGroup(client: any, groupId: string) {
+  const all: any[] = [];
+  const seen = new Set<string>();
   let pageToken: string | undefined;
-  do {
-    const page = await withTimeout<any>(
+
+  while (true) {
+    const res: any = await withTimeout(
       client.groups.listGroupRoles(groupId, {
         maxPageSize: 20,
         ...(pageToken ? { pageToken } : {}),
       })
     );
-    const slice = page.groupRoles ?? [];
-    for (const role of slice) {
+
+    const roles =
+      res.groupRoles ??
+      res.roles ??
+      res.data?.groupRoles ??
+      [];
+
+    for (const role of roles) {
+      if (!role?.id) continue;
+      if (seen.has(role.id)) continue;
+
+      seen.add(role.id);
       all.push(role);
     }
-    pageToken =
-      typeof page.nextPageToken === "string" && page.nextPageToken.length > 0
-        ? page.nextPageToken
-        : undefined;
-  } while (pageToken);
+
+    const next =
+      res.nextPageToken ??
+      res.data?.nextPageToken;
+
+    if (!next || next === pageToken) break;
+
+    pageToken = next;
+  }
 
   return all;
 }
-
 function robloxRankNum(roleLike: { rank?: unknown }): number {
   return Number(roleLike.rank);
 }
@@ -206,7 +218,7 @@ export async function terminateUser(userid: number, groupid: number, apiKey: str
   const Client = await initiateClient(apiKey);
 
   try {
-    const groupRolesList = await listAllGroupRolesForGroup(Client, groupid.toString());
+    const groupRolesList = await getAllRoles(groupid, apiKey)
     const targetRole = groupRolesList.find((grole) => Number(grole.rank) === 1);
     if (!targetRole) {
       console.log("[Integrated Ranking]: Couldn't find role with rank 1.");
