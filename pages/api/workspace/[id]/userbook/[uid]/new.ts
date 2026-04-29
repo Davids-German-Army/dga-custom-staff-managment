@@ -101,7 +101,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Data>) {
       error: "You cannot perform actions on yourself.",
     });
   }
-  const opencloudKey = await getConfig("roblox_opencloud", workspaceGroupId)
+  const opencloudKey = await getConfig("roblox_opencloud", workspaceGroupId);
+  const configOpenCloudApiKey =
+    opencloudKey &&
+    typeof (opencloudKey as { key?: string }).key === "string" &&
+    (opencloudKey as { key: string }).key.length > 0
+      ? (opencloudKey as { key: string }).key
+      : null;
+  const externalRanking = await prisma.workspaceExternalServices.findFirst({
+    where: { workspaceGroupId },
+  });
+  const integratedRankingKey =
+    externalRanking?.rankingProvider === "opencloudranking" &&
+    typeof externalRanking?.rankingToken === "string" &&
+    externalRanking.rankingToken.length > 0
+      ? externalRanking.rankingToken
+      : null;
+  const promotionRankCap =
+    typeof externalRanking?.rankingMaxRank === "number" &&
+    externalRanking.rankingMaxRank >= 1
+      ? externalRanking.rankingMaxRank
+      : null;
+  const rankingRobloxApiKey =
+    integratedRankingKey ??
+    ((externalRanking?.rankingProvider || "") !== "opencloudranking"
+      ? configOpenCloudApiKey
+      : null);
   const rankGun = await getRankGun(workspaceGroupId);
   const canUseRankGun = await hasRankUsersPermission(req, workspaceGroupId);
   let rankBefore: number | null = null;
@@ -173,7 +198,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Data>) {
   }
 
   if (
-    ((rankGun && canUseRankGun) || opencloudKey) &&
+    ((rankGun && canUseRankGun) || rankingRobloxApiKey) &&
     (type === "promotion" ||
       type === "demotion" ||
       type === "rank_change" ||
@@ -187,8 +212,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Data>) {
         case "promotion":
           if (rankGunAPI && rankGun) {
             result = await rankGunAPI.promoteUser(userId, rankGun.workspaceId);
-          } else if (opencloudKey) {
-            result = rbx.promoteUser(userId, workspaceGroupId, opencloudKey)
+          } else if (rankingRobloxApiKey) {
+            result = await rbx.promoteUser(userId, workspaceGroupId, rankingRobloxApiKey, {
+              maxPromotionRank: promotionRankCap,
+            });
           } else {
             return res.status(400).json({
               success: false,
@@ -199,11 +226,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Data>) {
         case "demotion":
           if (rankGunAPI && rankGun) {
             result = await rankGunAPI.demoteUser(userId, rankGun.workspaceId);
-          } else if (opencloudKey) {
+          } else if (rankingRobloxApiKey) {
             result = await rbx.demoteUser(
               userId,
               workspaceGroupId,
-              opencloudKey
+              rankingRobloxApiKey
             );
           } else {
             return res.status(400).json({
@@ -215,11 +242,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Data>) {
         case "termination":
           if (rankGunAPI && rankGun) {
             result = await rankGunAPI.terminateUser(userId, rankGun.workspaceId);
-          } else if (opencloudKey) {
+          } else if (rankingRobloxApiKey) {
             result = await rbx.terminateUser(
               userId,
               workspaceGroupId,
-              opencloudKey
+              rankingRobloxApiKey
             );
           } else {
             return res.status(400).json({
@@ -284,11 +311,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Data>) {
               rankGun ? rankGun.workspaceId : "",
               parseInt(targetRank)
             );
-          } else if (opencloudKey) {
-            result = await rbx.terminateUser(
+          } else if (rankingRobloxApiKey) {
+            result = await rbx.rankChange(
               userId,
               workspaceGroupId,
-              opencloudKey
+              parseInt(String(targetRank), 10),
+              rankingRobloxApiKey,
+              { maxPromotionRank: promotionRankCap }
             );
           } else {
             return res.status(400).json({
@@ -299,9 +328,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Data>) {
           }
 
           if (result && !result.success) {
-            // Log the full result for debugging so we can see RankGun's response shape
             console.error("RankGun returned an error result:", result);
-            let errorMessage = result.error || "Ranking operation failed.";
+            let errorMessage =
+              result.error ||
+              (result as { message?: string }).message ||
+              "Ranking operation failed.";
             if (typeof errorMessage === "object") {
               try {
                 errorMessage = JSON.stringify(errorMessage);

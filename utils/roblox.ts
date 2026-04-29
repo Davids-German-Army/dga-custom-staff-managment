@@ -139,7 +139,12 @@ export async function terminateUser(userid: number, groupid: number, apiKey: str
   }
 }
 
-export async function promoteUser(userid: number, groupid: number, apiKey: string) {
+export async function promoteUser(
+  userid: number,
+  groupid: number,
+  apiKey: string,
+  opts?: { maxPromotionRank?: number | null }
+) {
   const Client = await initiateClient(apiKey);
 
   try {
@@ -176,6 +181,17 @@ export async function promoteUser(userid: number, groupid: number, apiKey: strin
       return {
         success: false,
         error: "User is already at highest rank."
+      };
+    }
+
+    if (
+      opts?.maxPromotionRank != null &&
+      typeof nextRole.rank === "number" &&
+      nextRole.rank > opts.maxPromotionRank
+    ) {
+      return {
+        success: false,
+        error: `Integrated Ranking cannot promote past rank ${opts.maxPromotionRank}.`,
       };
     }
 
@@ -251,7 +267,13 @@ export async function demoteUser(userid: number, groupid: number, apiKey: string
   }
 }
 
-export async function rankChange(userid: number, groupid: number, rankid: number, apiKey: string) {
+export async function rankChange(
+  userid: number,
+  groupid: number,
+  rankid: number,
+  apiKey: string,
+  opts?: { maxPromotionRank?: number | null }
+) {
   const Client = await initiateClient(apiKey);
 
   try {
@@ -263,6 +285,17 @@ export async function rankChange(userid: number, groupid: number, rankid: number
         success: false,
         error: "Target role is non existent."
       }
+    }
+
+    if (
+      opts?.maxPromotionRank != null &&
+      typeof TargetRole.rank === "number" &&
+      TargetRole.rank > opts.maxPromotionRank
+    ) {
+      return {
+        success: false,
+        error: `Integrated Ranking cannot set rank above ${opts.maxPromotionRank}.`,
+      };
     }
 
     await Client.groups.updateGroupMembership(groupid.toString(), userid.toString(), TargetRole.id);
