@@ -9,6 +9,114 @@ import { withPermissionCheck } from "@/utils/permissionsManager";
 import { RankGunAPI, getRankGun } from "@/utils/rankgun";
 
 import * as noblox from "noblox.js";
+
+type RankingResultLike = {
+  success: boolean;
+  error?: unknown;
+  message?: unknown;
+};
+
+function rankingFailureMessage(result: RankingResultLike): string {
+  let msg: unknown =
+    result.error ??
+    ("message" in result ? result.message : undefined) ??
+    "Ranking operation failed.";
+  if (typeof msg === "object") {
+    try {
+      msg = JSON.stringify(msg);
+    } catch {
+      msg = String(msg);
+    }
+  }
+  return String(msg);
+}
+
+async function syncWorkspaceMemberRankFromRobloxNoblox(
+  workspaceGroupId: number,
+  userId: number
+): Promise<{ rankAfter: number; rankNameAfter: string | null } | null> {
+  try {
+    const newRank = await noblox.getRankInGroup(workspaceGroupId, userId);
+    const newRankInfo = await noblox.getRole(workspaceGroupId, newRank);
+    const rankNameAfter = newRankInfo?.name || null;
+
+    await prisma.rank.upsert({
+      where: {
+        userId_workspaceGroupId: {
+          userId: BigInt(userId),
+          workspaceGroupId,
+        },
+      },
+      update: {
+        rankId: BigInt(newRank),
+      },
+      create: {
+        userId: BigInt(userId),
+        workspaceGroupId,
+        rankId: BigInt(newRank),
+      },
+    });
+
+    const rankInfo = await noblox.getRole(workspaceGroupId, newRank);
+    if (rankInfo) {
+      const role = await prisma.role.findFirst({
+        where: {
+          workspaceGroupId,
+          groupRoles: {
+            hasSome: [rankInfo.id],
+          },
+        },
+      });
+
+      if (role) {
+        const currentUser = await prisma.user.findFirst({
+          where: { userid: BigInt(userId) },
+          include: {
+            roles: {
+              where: { workspaceGroupId },
+            },
+          },
+        });
+
+        if (currentUser && currentUser.roles.length > 0) {
+          for (const oldRole of currentUser.roles) {
+            await prisma.user.update({
+              where: {
+                userid: BigInt(userId),
+              },
+              data: {
+                roles: {
+                  disconnect: {
+                    id: oldRole.id,
+                  },
+                },
+              },
+            });
+          }
+        }
+
+        await prisma.user.update({
+          where: {
+            userid: BigInt(userId),
+          },
+          data: {
+            roles: {
+              connect: {
+                id: role.id,
+              },
+            },
+          },
+        });
+      }
+    }
+
+    return { rankAfter: newRank, rankNameAfter };
+  } catch (rankUpdateError) {
+    console.error("Error updating user rank in database:", rankUpdateError);
+    return null;
+  }
+}
+
 type Data = {
   success: boolean;
   error?: string;
@@ -346,187 +454,52 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Data>) {
             });
           }
 
-          if (type === "termination" && result?.success) {
-            try {
-              if (BigInt(userId) === req.session.userid) {
-                return res.status(400).json({
-                  success: false,
-                  error: "You cannot terminate yourself.",
-                });
-              }
-
-              const currentUser = await prisma.user.findFirst({
-                where: {
-                  userid: BigInt(userId),
-                },
-                include: {
-                  roles: {
-                    where: {
-                      workspaceGroupId: workspaceGroupId,
-                    },
-                  },
-                },
-              });
-
-              if (currentUser && currentUser.roles.length > 0) {
-                for (const role of currentUser.roles) {
-                  await prisma.user.update({
-                    where: {
-                      userid: BigInt(userId),
-                    },
-                    data: {
-                      roles: {
-                        disconnect: {
-                          id: role.id,
-                        },
-                      },
-                    },
-                  });
-                }
-              }
-
-              await prisma.rank.deleteMany({
-                where: {
-                  userId: BigInt(userId),
-                  workspaceGroupId: workspaceGroupId,
-                },
-              });
-
-              const userbook = await prisma.userBook.create({
-                data: {
-                  userId: BigInt(userId),
-                  type,
-                  workspaceGroupId: workspaceGroupId,
-                  reason: notes,
-                  adminId: BigInt(req.session.userid),
-                  rankBefore,
-                  rankAfter: 1,
-                  rankNameBefore,
-                  rankNameAfter,
-                },
-                include: {
-                  admin: true,
-                },
-              });
-
-              try {
-                await logAudit(
-                  workspaceGroupId,
-                  req.session.userid || null,
-                  "userbook.create",
-                  `userbook:${userbook.id}`,
-                  {
-                    type,
-                    userId,
-                    adminId: req.session.userid,
-                    rankBefore,
-                    rankAfter: 1,
-                    rankNameBefore,
-                    rankNameAfter,
-                  }
-                );
-              } catch (e) { }
-
-              return res.status(200).json({
-                success: true,
-                log: JSON.parse(
-                  JSON.stringify(userbook, (key, value) =>
-                    typeof value === "bigint" ? value.toString() : value
-                  )
-                ),
-                terminated: true,
-              });
-            } catch (terminationError) {
-              return res.status(500).json({
-                success: false,
-                error: "Failed to remove user from workspace",
-              });
-            }
-          }
-
-          try {
-            const newRank = await noblox.getRankInGroup(workspaceGroupId, userId);
-            rankAfter = newRank;
-            const newRankInfo = await noblox.getRole(workspaceGroupId, newRank);
-            rankNameAfter = newRankInfo?.name || null;
-
-            await prisma.rank.upsert({
-              where: {
-                userId_workspaceGroupId: {
-                  userId: BigInt(userId),
-                  workspaceGroupId: workspaceGroupId,
-                },
-              },
-              update: {
-                rankId: BigInt(newRank),
-              },
-              create: {
-                userId: BigInt(userId),
-                workspaceGroupId: workspaceGroupId,
-                rankId: BigInt(newRank),
-              },
-            });
-
-            const rankInfo = await noblox.getRole(workspaceGroupId, newRank);
-            if (rankInfo) {
-              const role = await prisma.role.findFirst({
-                where: {
-                  workspaceGroupId: workspaceGroupId,
-                  groupRoles: {
-                    hasSome: [rankInfo.id],
-                  },
-                },
-              });
-
-              if (role) {
-                const currentUser = await prisma.user.findFirst({
-                  where: {
-                    userid: BigInt(userId),
-                  },
-                  include: {
-                    roles: {
-                      where: {
-                        workspaceGroupId: workspaceGroupId,
-                      },
-                    },
-                  },
-                });
-
-                if (currentUser && currentUser.roles.length > 0) {
-                  for (const oldRole of currentUser.roles) {
-                    await prisma.user.update({
-                      where: {
-                        userid: BigInt(userId),
-                      },
-                      data: {
-                        roles: {
-                          disconnect: {
-                            id: oldRole.id,
-                          },
-                        },
-                      },
-                    });
-                  }
-                }
-
-                await prisma.user.update({
-                  where: {
-                    userid: BigInt(userId),
-                  },
-                  data: {
-                    roles: {
-                      connect: {
-                        id: role.id,
-                      },
-                    },
-                  },
-                });
-              }
-            }
-          } catch (rankUpdateError) {
-            console.error("Error updating user rank in database:", rankUpdateError);
+          const syncedRank = await syncWorkspaceMemberRankFromRobloxNoblox(
+            workspaceGroupId,
+            userId
+          );
+          if (syncedRank) {
+            rankAfter = syncedRank.rankAfter;
+            rankNameAfter = syncedRank.rankNameAfter;
           }
       }
+
+      if (
+        typeof result !== "undefined" &&
+        result &&
+        typeof result === "object" &&
+        "success" in result &&
+        (type === "promotion" ||
+          type === "demotion" ||
+          type === "termination")
+      ) {
+        const r = result as RankingResultLike;
+        if (!r.success) {
+          return res.status(400).json({
+            success: false,
+            error: rankingFailureMessage(r),
+          });
+        }
+      }
+
+      if (
+        typeof result !== "undefined" &&
+        result &&
+        typeof result === "object" &&
+        "success" in result &&
+        (result as RankingResultLike).success &&
+        (type === "promotion" || type === "demotion")
+      ) {
+        const synced = await syncWorkspaceMemberRankFromRobloxNoblox(
+          workspaceGroupId,
+          userId
+        );
+        if (synced) {
+          rankAfter = synced.rankAfter;
+          rankNameAfter = synced.rankNameAfter;
+        }
+      }
+
     } catch (error: any) {
       let errorMessage =
         error?.response?.data?.error ||
