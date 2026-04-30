@@ -843,7 +843,7 @@ const Views: pageWithLayout<pageProps> = ({ isAdmin, hasManageViewsPerm, hasCrea
 
           {hasUseSavedViews() && (
             <div className="md:w-56 w-full shrink-0">
-              <div className="bg-white dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden">
+              <div className="bg-white dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden mb-6 sm:mb-0">
                 <div className="flex items-center justify-between px-3 py-2.5 border-b border-zinc-100 dark:border-zinc-700/60">
                   <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
                     Views
